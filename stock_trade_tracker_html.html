@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Trade Tracker Pro</title>
+<style>
+body { font-family: Arial; margin: 20px; }
+.tab { cursor:pointer; padding:10px; display:inline-block; border:1px solid #ccc; }
+.active { background:#ddd; }
+table { border-collapse: collapse; width: 100%; margin-top: 10px; }
+th, td { border: 1px solid #ddd; padding: 8px; text-align: center; }
+th { background:#f4f4f4; }
+.buy { color: green; font-weight: bold; }
+.sell { color: red; font-weight: bold; }
+input, select, button { margin: 5px; padding: 6px; }
+</style>
+</head>
+<body>
+
+<h2>Trade Tracker</h2>
+
+<div>
+  <span class="tab active" onclick="showTab('trade')">Trades</span>
+  <span class="tab" onclick="showTab('report')">Reports</span>
+</div>
+
+<div id="tradeTab">
+
+<h3>Add Trade</h3>
+<input id="symbol" placeholder="Symbol">
+<input id="qty" type="number" placeholder="Qty">
+<select id="type">
+<option>BUY</option>
+<option>SELL</option>
+</select>
+<input id="price" type="number" placeholder="Price">
+<button onclick="addTrade()">Add</button>
+
+<h3>Open Trades</h3>
+<table>
+<thead><tr><th>Symbol</th><th>Qty</th><th>Type</th><th>Entry</th><th>Current</th><th>P&L</th></tr></thead>
+<tbody id="openBody"></tbody>
+</table>
+
+<h3>Closed Trades</h3>
+<table>
+<thead><tr><th>Symbol</th><th>Qty</th><th>Buy</th><th>Sell</th><th>P&L</th><th>Date</th></tr></thead>
+<tbody id="closedBody"></tbody>
+</table>
+
+</div>
+
+<div id="reportTab" style="display:none">
+
+<h3>P&L by Stock</h3>
+<table>
+<thead><tr><th>Symbol</th><th>Total P&L</th></tr></thead>
+<tbody id="stockReport"></tbody>
+</table>
+
+<h3>P&L by Month</h3>
+<table>
+<thead><tr><th>Month</th><th>Total P&L</th></tr></thead>
+<tbody id="monthReport"></tbody>
+</table>
+
+</div>
+
+<script>
+let openTrades = JSON.parse(localStorage.getItem('openTrades')) || [];
+let closedTrades = JSON.parse(localStorage.getItem('closedTrades')) || [];
+
+function save() {
+  localStorage.setItem('openTrades', JSON.stringify(openTrades));
+  localStorage.setItem('closedTrades', JSON.stringify(closedTrades));
+}
+
+function showTab(tab) {
+  document.getElementById('tradeTab').style.display = tab==='trade'?'block':'none';
+  document.getElementById('reportTab').style.display = tab==='report'?'block':'none';
+}
+
+async function fetchPrice(symbol) {
+  try {
+    let res = await fetch(`https://query1.finance.yahoo.com/v7/finance/quote?symbols=${symbol}`);
+    let data = await res.json();
+    return data.quoteResponse.result[0]?.regularMarketPrice || null;
+  } catch {
+    return null;
+  }
+}
+
+async function addTrade() {
+  let symbol = symbolEl.value.toUpperCase();
+  let qty = +qtyEl.value;
+  let type = typeEl.value;
+  let price = +priceEl.value;
+
+  if(!symbol||!qty||!price) return alert('Fill all');
+
+  let idx = openTrades.findIndex(t=>t.symbol===symbol && t.type!==type);
+
+  if(idx!==-1){
+    let t = openTrades[idx];
+    let pnl = type==='SELL' ? (price - t.price)*qty : (t.price - price)*qty;
+
+    closedTrades.push({symbol, qty, buy:type==='SELL'?t.price:price, sell:type==='SELL'?price:t.price, pnl, date:new Date().toISOString()});
+    openTrades.splice(idx,1);
+  } else {
+    openTrades.push({symbol, qty, type, price, current:null});
+  }
+
+  save(); render();
+}
+
+async function updatePrices(){
+  for(let t of openTrades){
+    let p = await fetchPrice(t.symbol);
+    if(p) t.current = p;
+  }
+  save(); render();
+}
+
+function render(){
+  openBody.innerHTML='';
+  closedBody.innerHTML='';
+
+  openTrades.forEach(t=>{
+    let pnl = t.current ? (t.type==='BUY'?(t.current-t.price):(t.price-t.current))*t.qty : '-';
+
+    openBody.innerHTML+=`<tr>
+<td>${t.symbol}</td>
+<td>${t.qty}</td>
+<td class="${t.type==='BUY'?'buy':'sell'}">${t.type}</td>
+<td>${t.price}</td>
+<td>${t.current||'<input type=number onchange="manualPrice(this,\'${t.symbol}\')">'}</td>
+<td>${pnl==='-'?'-':pnl.toFixed(2)}</td>
+</tr>`;
+  });
+
+  closedTrades.forEach(t=>{
+    closedBody.innerHTML+=`<tr>
+<td>${t.symbol}</td>
+<td>${t.qty}</td>
+<td>${t.buy}</td>
+<td>${t.sell}</td>
+<td>${t.pnl.toFixed(2)}</td>
+<td>${t.date.split('T')[0]}</td>
+</tr>`;
+  });
+
+  renderReports();
+}
+
+function manualPrice(el,symbol){
+  let t=openTrades.find(x=>x.symbol===symbol);
+  if(t){ t.current=+el.value; save(); render(); }
+}
+
+function renderReports(){
+  let stockMap={};
+  let monthMap={};
+
+  closedTrades.forEach(t=>{
+    stockMap[t.symbol]=(stockMap[t.symbol]||0)+t.pnl;
+
+    let m=t.date.slice(0,7);
+    monthMap[m]=(monthMap[m]||0)+t.pnl;
+  });
+
+  stockReport.innerHTML='';
+  for(let s in stockMap){
+    stockReport.innerHTML+=`<tr><td>${s}</td><td>${stockMap[s].toFixed(2)}</td></tr>`;
+  }
+
+  monthReport.innerHTML='';
+  for(let m in monthMap){
+    monthReport.innerHTML+=`<tr><td>${m}</td><td>${monthMap[m].toFixed(2)}</td></tr>`;
+  }
+}
+
+// elements
+const symbolEl=document.getElementById('symbol');
+const qtyEl=document.getElementById('qty');
+const typeEl=document.getElementById('type');
+const priceEl=document.getElementById('price');
+
+render();
+updatePrices();
+setInterval(updatePrices,15000);
+</script>
+
+</body>
+</html>
